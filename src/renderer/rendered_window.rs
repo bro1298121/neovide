@@ -353,6 +353,7 @@ impl RenderedWindow {
             .any(|line| line.borrow().has_transparency)
     }
 
+    #[allow(clippy::too_many_arguments)] // draw call chain threading (precedent: bridge/mod.rs)
     pub fn draw(
         &mut self,
         root_canvas: &Canvas,
