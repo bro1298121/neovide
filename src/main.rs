@@ -37,6 +37,9 @@ mod window;
 #[cfg(target_os = "windows")]
 mod windows_utils;
 
+#[cfg(target_os = "windows")]
+mod desktop_capture;
+
 #[macro_use]
 extern crate derive_new;
 

@@ -355,6 +355,16 @@ impl D3DSkiaRenderer {
                 Some(surface_props).as_ref(),
             )
             .expect("Could not create backend render target");
+
+            let image_info = surface.image_info();
+            log::warn!(
+                "[backdrop] D3D surface #{i}: color_type={:?} alpha_type={:?} (swapchain format={:?} alpha_mode={:?})",
+                image_info.color_type(),
+                image_info.alpha_type(),
+                self.swap_chain_desc.Format,
+                self.swap_chain_desc.AlphaMode,
+            );
+
             self.surfaces.push(surface);
         }
         self.frame_index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() as usize };

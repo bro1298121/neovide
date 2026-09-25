@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use approx::AbsDiffEq;
 use itertools::Itertools;
-use skia_safe::{Canvas, Paint, Path, PathBuilder, op};
+use skia_safe::{BlendMode, Canvas, Color, Paint, Path, PathBuilder, op};
 use winit::event::WindowEvent;
 
 use crate::{
@@ -48,12 +48,14 @@ static PLOT_NAMES_Y: [&CStr; 4] = [
 #[setting_prefix = "cursor"]
 #[derive(Clone)]
 pub struct CursorSettings {
+    enabled: bool,                      // <-- 新增：光标总开关
     antialiasing: bool,
     animation_length: f32,
     short_animation_length: f32,
     animate_in_insert_mode: bool,
     animate_command_line: bool,
     trail_size: f32,
+    smear_gradient: bool,
     unfocused_outline_width: f32,
     smooth_blink: bool,
     cell_color_fallback: bool,
@@ -71,12 +73,14 @@ pub struct CursorSettings {
 impl Default for CursorSettings {
     fn default() -> Self {
         CursorSettings {
+            enabled: true,              // <-- 新增：默认开启，向后兼容
             antialiasing: true,
             animation_length: 0.150,
             short_animation_length: 0.04,
             animate_in_insert_mode: true,
             animate_command_line: true,
             trail_size: 1.0,
+            smear_gradient: false,
             unfocused_outline_width: 1.0 / 8.0,
             smooth_blink: false,
             cell_color_fallback: false,
@@ -226,6 +230,7 @@ pub struct CursorRenderer {
     previous_vfx_mode: cursor_vfx::VfxModeList,
     window_has_focus: bool,
     jumped: bool,
+    corner_alphas: [f32; 4],
 
     settings: Arc<Settings>,
 }
@@ -244,6 +249,7 @@ impl CursorRenderer {
             previous_vfx_mode: cursor_vfx::VfxModeList::default(),
             window_has_focus: true,
             jumped: false,
+            corner_alphas: [1.0; 4],
 
             settings,
         };
@@ -336,6 +342,12 @@ impl CursorRenderer {
     pub fn draw(&mut self, grid_renderer: &mut GridRenderer, canvas: &Canvas) {
         tracy_zone!("cursor_draw");
         let settings = self.settings.get::<CursorSettings>();
+        
+        // <-- 新增：检查光标总开关，关闭则跳过绘制
+        if !settings.enabled {
+            return;
+        }
+        
         let render = self.blink_status.should_render() || settings.smooth_blink;
         let opacity = match settings.smooth_blink {
             true => self.blink_status.opacity(),
@@ -415,11 +427,13 @@ impl CursorRenderer {
         dt: f32,
     ) -> bool {
         tracy_zone!("cursor_animate");
-        if !self.cursor.enabled {
+        
+        // <-- 修改：先获取 settings，再检查光标总开关
+        let settings = self.settings.get::<CursorSettings>();
+        if !self.cursor.enabled || !settings.enabled {
             return false;
         }
-        let settings = self.settings.get::<CursorSettings>();
-
+        
         if settings.vfx_mode != self.previous_vfx_mode {
             self.cursor_vfxs = cursor_vfx::new_cursor_vfxs(&settings.vfx_mode);
             self.previous_vfx_mode = settings.vfx_mode.clone();
@@ -499,6 +513,20 @@ impl CursorRenderer {
                 animating |= corner_animating;
             }
 
+            if settings.smear_gradient {
+                let cell_diag = cursor_dimensions.width.hypot(cursor_dimensions.height);
+                for (i, corner) in self.corners.iter().enumerate() {
+                    let target = corner.get_destination(center_destination, cursor_dimensions.into());
+                    let dist = (target - corner.current_position).length();
+                    let lag = if cell_diag > f32::EPSILON {
+                        (dist / cell_diag).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    self.corner_alphas[i] = 1.0 - lag;
+                }
+            }
+
             let mut vfx_animating = false;
             let vfx_base_color = self
                 .cursor
@@ -546,8 +574,44 @@ impl CursorRenderer {
             .close();
 
         let path = builder.detach();
-        canvas.draw_path(&path, paint);
+        let settings = self.settings.get::<CursorSettings>();
+        if settings.smear_gradient {
+            self.draw_smear_gradient_quad(canvas, paint);
+        } else {
+            canvas.draw_path(&path, paint);
+        }
         path
+    }
+
+    fn draw_smear_gradient_quad(&self, canvas: &Canvas, paint: &Paint) {
+        let settings = self.settings.get::<CursorSettings>();
+        let base_color = paint.color();
+        let base_alpha = base_color.a() as f32 / 255.0;
+
+        let mut builder = skia_safe::vertices::Builder::new(
+            skia_safe::vertices::VertexMode::Triangles,
+            4,
+            6,
+            skia_safe::vertices::BuilderFlags::HAS_COLORS,
+        );
+        let positions = builder.positions();
+        for (i, corner) in self.corners.iter().enumerate() {
+            positions[i] = to_skia_point(corner.current_position.round());
+        }
+        if let Some(indices) = builder.indices() {
+            indices.copy_from_slice(&[0, 1, 2, 0, 2, 3]);
+        }
+        if let Some(colors) = builder.colors() {
+            for (i, corner_alpha) in self.corner_alphas.iter().enumerate() {
+                let alpha = (base_alpha * corner_alpha * 255.0) as u8;
+                colors[i] = Color::from_argb(alpha, base_color.r(), base_color.g(), base_color.b());
+            }
+        }
+        let vertices = builder.detach();
+
+        let mut vpaint = Paint::new(skia_safe::colors::WHITE, None);
+        vpaint.set_anti_alias(settings.antialiasing);
+        canvas.draw_vertices(&vertices, BlendMode::Modulate, &vpaint);
     }
 
     fn draw_rectangular_outline(&self, canvas: &Canvas, paint: &Paint, outline_width: f32) -> Path {

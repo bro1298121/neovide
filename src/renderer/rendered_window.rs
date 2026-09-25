@@ -326,6 +326,7 @@ impl RenderedWindow {
         grid_scale: GridScale,
         content_region: Option<PixelRect<f32>>,
         rightmost_window: bool,
+        capture_active: bool,
     ) -> WindowDrawDetails {
         let pixel_region_box = self.pixel_region(grid_scale);
         let draw_region_box = self.expanded_pixel_region(
@@ -347,7 +348,12 @@ impl RenderedWindow {
 
         root_canvas.save();
         root_canvas.clip_rect(pixel_region, None, Some(false));
-        root_canvas.clear(default_background);
+        if capture_active {
+            let tint = Paint::default().set_color(default_background).to_owned();
+            root_canvas.draw_paint(&tint);
+        } else {
+            root_canvas.clear(default_background);
+        }
 
         self.draw_background_surface(root_canvas, draw_region_box, grid_scale);
         self.draw_foreground_surface(root_canvas, draw_region_box, grid_scale);

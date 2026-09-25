@@ -67,7 +67,7 @@ use crate::{
 #[cfg(windows)]
 use {
     crate::windows_utils::{register_right_click, unregister_right_click},
-    winit::platform::windows::{BackdropType, Color, WindowExtWindows},
+    winit::platform::windows::{Color, WindowExtWindows},
 };
 
 const GRID_TOLERANCE: f32 = 1e-3;
@@ -623,12 +623,41 @@ impl WinitWindowWrapper {
                 }
             }
             WindowSettingsChanged::WindowBlurred(blur) => {
-                let WindowSettings { opacity, .. } = self.settings.get::<WindowSettings>();
-                let transparent = opacity < 1.0;
-                for window_id in window_ids.iter() {
-                    if let Some(route) = self.routes.get(window_id) {
-                        let window = route.window.winit_window.clone();
-                        window.set_blur(blur && transparent);
+                log::warn!("[backdrop] runtime: WindowBlurred event blur={blur}");
+                #[cfg(target_os = "windows")]
+                {
+                    let WindowSettings { window_backdrop, .. } = self.settings.get::<WindowSettings>();
+                    for window_id in window_ids.iter() {
+                        if let Some(route) = self.routes.get(window_id) {
+                            let window = route.window.winit_window.clone();
+                            let backdrop = if blur { Some(window_backdrop) } else { None };
+                            crate::windows_utils::set_window_backdrop(&window, backdrop);
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let WindowSettings { opacity, .. } = self.settings.get::<WindowSettings>();
+                    let transparent = opacity < 1.0;
+                    for window_id in window_ids.iter() {
+                        if let Some(route) = self.routes.get(window_id) {
+                            let window = route.window.winit_window.clone();
+                            window.set_blur(blur && transparent);
+                        }
+                    }
+                }
+            }
+            WindowSettingsChanged::WindowBackdrop(backdrop_type) => {
+                log::warn!("[backdrop] runtime: WindowBackdrop event backdrop={backdrop_type:?}");
+                #[cfg(target_os = "windows")]
+                {
+                    let WindowSettings { window_blurred, .. } = self.settings.get::<WindowSettings>();
+                    for window_id in window_ids.iter() {
+                        if let Some(route) = self.routes.get(window_id) {
+                            let window = route.window.winit_window.clone();
+                            let backdrop = if window_blurred { Some(backdrop_type) } else { None };
+                            crate::windows_utils::set_window_backdrop(&window, backdrop);
+                        }
                     }
                 }
             }
@@ -1349,7 +1378,19 @@ impl WinitWindowWrapper {
             return;
         };
 
-        renderer.draw_frame(skia_renderer.canvas(), Some(&content_rect), dt);
+        let desktop_area = window
+            .outer_position()
+            .ok()
+            .map(|pos| {
+                [
+                    pos.x + content_rect.min.x as i32,
+                    pos.y + content_rect.min.y as i32,
+                    pos.x + content_rect.max.x as i32,
+                    pos.y + content_rect.max.y as i32,
+                ]
+            });
+
+        renderer.draw_frame(skia_renderer.canvas(), Some(&content_rect), dt, desktop_area);
 
         skia_renderer.flush();
 
@@ -1483,6 +1524,8 @@ impl WinitWindowWrapper {
 
             #[cfg(target_os = "windows")]
             corner_preference,
+            #[cfg(target_os = "windows")]
+            window_backdrop,
             #[cfg(target_os = "windows")]
             title_background_color,
             #[cfg(target_os = "windows")]
@@ -1651,7 +1694,11 @@ impl WinitWindowWrapper {
 
         #[cfg(target_os = "windows")]
         if window_blurred {
-            window.set_system_backdrop(BackdropType::TransientWindow); // Acrylic blur
+            let backdrop = Some(window_backdrop);
+            log::warn!(
+                "[backdrop] startup: window_blurred={window_blurred} backdrop={backdrop:?} (startup window creation)"
+            );
+            crate::windows_utils::set_window_backdrop(&window, backdrop);
         }
 
         if fullscreen {

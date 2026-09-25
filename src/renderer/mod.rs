@@ -33,6 +33,9 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
+#[cfg(target_os = "windows")]
+use crate::desktop_capture::DesktopCapture;
+
 use crate::{
     WindowSettings,
     bridge::EditorMode,
@@ -45,7 +48,7 @@ use crate::{
     },
     settings::*,
     units::{GridPos, GridRect, GridScale, GridSize, PixelPos, PixelRect, to_skia_rect},
-    window::{EventPayload, ShouldRender},
+    window::{EventPayload, ShouldRender, WindowBackdrop},
 };
 
 #[cfg(feature = "profiling")]
@@ -171,6 +174,15 @@ pub struct Renderer {
 
     settings: Arc<Settings>,
     message_selection: Option<MessageSelection>,
+
+    #[cfg(target_os = "windows")]
+    desktop_capture: Option<DesktopCapture>,
+    #[cfg(target_os = "windows")]
+    desktop_image: Option<skia_safe::Image>,
+    #[cfg(target_os = "windows")]
+    desktop_image_gen: u64,
+    #[cfg(target_os = "windows")]
+    desktop_no_image_warned: bool,
 }
 
 /// Results of processing the draw commands from the command channel.
@@ -213,6 +225,23 @@ impl Renderer {
             user_scale_factor,
             settings,
             message_selection: None,
+
+            #[cfg(target_os = "windows")]
+            desktop_capture: match DesktopCapture::new() {
+                Some(capture) => Some(capture),
+                None => {
+                    log::warn!(
+                        "[desktop-capture] D3D11 desktop duplication unavailable; aero will fall back to transparent"
+                    );
+                    None
+                }
+            },
+            #[cfg(target_os = "windows")]
+            desktop_image: None,
+            #[cfg(target_os = "windows")]
+            desktop_image_gen: 0,
+            #[cfg(target_os = "windows")]
+            desktop_no_image_warned: false,
         }
     }
 
@@ -237,6 +266,7 @@ impl Renderer {
         root_canvas: &Canvas,
         content_region: Option<&PixelRect<f32>>,
         dt: f32,
+        _desktop_area: Option<[i32; 4]>,
     ) {
         tracy_zone!("renderer_draw_frame");
         let window_settings = self.settings.get::<WindowSettings>();
@@ -249,7 +279,83 @@ impl Renderer {
         let grid_scale = self.grid_renderer.grid_scale;
 
         let layer_grouping = self.settings.get::<RendererSettings>().experimental_layer_grouping;
-        root_canvas.clear(default_background);
+
+        let capture_active = window_settings.window_backdrop == WindowBackdrop::Aero
+            && window_settings.window_blurred;
+        #[cfg(target_os = "windows")]
+        if capture_active {
+            if let Some(capture) = self.desktop_capture.as_mut() {
+                let _ = capture.tick(_desktop_area);
+                if let Some(frame) = capture.frame().cloned().filter(|f| f.gen != self.desktop_image_gen)
+                {
+                    let info = skia_safe::ImageInfo::new(
+                        (frame.width as i32, frame.height as i32),
+                        skia_safe::ColorType::BGRA8888,
+                        skia_safe::AlphaType::Premul,
+                        skia_safe::ColorSpace::new_srgb(),
+                    );
+                    let image = skia_safe::images::raster_from_data(
+                        &info,
+                        skia_safe::Data::new_copy(&frame.data),
+                        frame.width as usize * 4,
+                    );
+                    if image.is_some() {
+                        self.desktop_image = image;
+                        if self.desktop_image_gen == 0 {
+                            log::info!(
+                                "[desktop-capture] uploaded first frame {}x{} to skia",
+                                frame.width,
+                                frame.height
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[desktop-capture] raster_from_data failed for {}x{} (data len {})",
+                            frame.width,
+                            frame.height,
+                            frame.data.len()
+                        );
+                    }
+                    self.desktop_image_gen = frame.gen;
+                }
+            } else if !self.desktop_no_image_warned {
+                self.desktop_no_image_warned = true;
+                log::warn!("[desktop-capture] capture unavailable, drawing transparent background");
+            }
+        }
+
+        if capture_active {
+            if let (Some(cr), Some(image)) = (content_region, self.desktop_image.as_ref()) {
+                if !self.desktop_no_image_warned {
+                    self.desktop_no_image_warned = true;
+                    log::info!(
+                        "[desktop-capture] drawing blurred frame {}x{} into {:?}",
+                        image.width(),
+                        image.height(),
+                        to_skia_rect(cr)
+                    );
+                }
+                let dst = to_skia_rect(cr);
+                let factor = (dst.width() / image.width() as f32).max(1.0);
+                let sigma = 10.0 * factor;
+                let mut paint =
+                    Paint::default().set_anti_alias(false).set_blend_mode(skia_safe::BlendMode::SrcOver).to_owned();
+                if let Some(filter) =
+                    skia_safe::image_filters::blur((sigma, sigma), None, None, None)
+                {
+                    paint.set_image_filter(filter);
+                } else {
+                    log::warn!("[desktop-capture] blur filter creation failed");
+                }
+                root_canvas.draw_image_rect(image, None, dst, &paint);
+                let tint = Paint::default().set_color(default_background).to_owned();
+                root_canvas.draw_paint(&tint);
+            } else {
+                root_canvas.clear(default_background);
+            }
+        } else {
+            root_canvas.clear(default_background);
+        }
         root_canvas.save();
         root_canvas.reset_matrix();
 
@@ -343,6 +449,7 @@ impl Renderer {
                     grid_scale,
                     content_region.copied(),
                     rightmost_root_window,
+                    capture_active,
                 )
             })
             .collect_vec();

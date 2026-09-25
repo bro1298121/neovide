@@ -1,6 +1,6 @@
 [package]
 name = "neovide"
-version = "0.16.2"
+version = "0.16.3"
 edition = "2021"
 build = "build.rs"
 resolver = "2"
@@ -35,7 +35,7 @@ members = ["neovide-derive"]
 default = []
 embed-fonts = []
 profiling = ["dep:tracy-client-sys"]
-gpu_profiling = ["profiling"]
+gpu_profiling = ["profiling", "dep:tracy-client-sys"]
 # Corresponds to https://github.com/nagisa/rust_tracy_client/blob/main/FEATURES.mkd
 tracy-system-tracing = ["tracy-client-sys?/system-tracing"]
 tracy-context-switch-tracing = ["tracy-client-sys?/context-switch-tracing"]
@@ -108,17 +108,22 @@ serial_test = "3.2.0"
 skia-safe = { version = "0.93.1", features = ["gl", "d3d", "textlayout"] }
 # This needs to match the version used by skia
 windows = { version = "0.62.0", features = [
+  "Win32_Foundation",
   "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",
   "Win32_Graphics_DirectComposition",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Dxgi",
   "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_System_Console",
   "Win32_System_Performance",
   "Win32_System_Threading",
+  "Win32_UI_Controls",
   "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 windows-registry = "0.6.1"
 wslpath-rs = "0.2"
