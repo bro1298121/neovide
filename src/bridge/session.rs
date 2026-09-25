@@ -193,12 +193,12 @@ impl NeovimInstance {
 
             #[cfg(windows)]
             {
-                // Fixup the address if the pipe on windows does not start with \\.\pipe\.
-                let address = if address.starts_with("\\\\.\\pipe\\") {
-                    address
-                } else {
-                    format!("\\\\.\\pipe\\{address}")
-                };
+                // Canonicalize the address to the Win32 form `\\.\pipe\...`.
+                // Neovim >= 0.13 reports pipe addresses in TO_SLASH-normalized form
+                // (`//./pipe/...`, see neovim#39155), which is equivalent but not the
+                // documented Win32 form; canonicalizing keeps the address
+                // unambiguous for any consumers.
+                let address = normalize_windows_pipe_address(address);
                 Ok(Self::split(
                     tokio::net::windows::named_pipe::ClientOptions::new().open(address)?,
                 ))
@@ -244,5 +244,49 @@ impl NeovimInstance {
     ) -> (BoxedReader, BoxedWriter) {
         let (reader, writer) = split(stream);
         (Box::new(reader), Box::new(writer))
+    }
+}
+
+/// Normalizes a Windows named pipe address to the canonical Win32 form `\\.\pipe\...`.
+///
+/// Neovim >= 0.13 (TO_SLASH path normalization, neovim#39155) reports pipe
+/// addresses with forward slashes (`//./pipe/...`). Both forms resolve to the
+/// same pipe object, but the backslash form is the documented Win32 form.
+/// Addresses without any pipe prefix are treated as bare pipe names, matching
+/// the previous behavior of unconditionally prefixing `\\.\pipe\`.
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_pipe_address(address: String) -> String {
+    const PIPE_PREFIX: &str = r"\\.\pipe\";
+    const FORWARD_SLASH_PIPE_PREFIX: &str = "//./pipe/";
+
+    if let Some(name) = address.strip_prefix(FORWARD_SLASH_PIPE_PREFIX) {
+        format!("{PIPE_PREFIX}{name}")
+    } else if address.starts_with(PIPE_PREFIX) {
+        address
+    } else {
+        format!("{PIPE_PREFIX}{address}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_windows_pipe_address;
+
+    #[test]
+    fn keeps_backslash_prefixed_address() {
+        let address = r"\\.\pipe\nvim-1234.5678.1".to_string();
+        assert_eq!(normalize_windows_pipe_address(address), r"\\.\pipe\nvim-1234.5678.1");
+    }
+
+    #[test]
+    fn normalizes_forward_slash_prefixed_address() {
+        let address = "//./pipe/nvim-1234.5678.1".to_string();
+        assert_eq!(normalize_windows_pipe_address(address), r"\\.\pipe\nvim-1234.5678.1");
+    }
+
+    #[test]
+    fn prefixes_bare_pipe_name() {
+        let address = "nvim-1234.5678.1".to_string();
+        assert_eq!(normalize_windows_pipe_address(address), r"\\.\pipe\nvim-1234.5678.1");
     }
 }
