@@ -51,6 +51,7 @@ impl FloatingLayer<'_> {
         default_background: Color,
         grid_scale: GridScale,
         content_region: Option<PixelRect<f32>>,
+        font_glow: f32,
     ) -> Vec<WindowDrawDetails> {
         let pixel_regions =
             self.windows.iter().map(|window| window.pixel_region(grid_scale)).collect::<Vec<_>>();
@@ -106,7 +107,7 @@ impl FloatingLayer<'_> {
         (0..self.windows.len()).for_each(|i| {
             let window = &mut self.windows[i];
             window.draw_background_surface(root_canvas, pixel_regions[i], grid_scale);
-            window.draw_foreground_surface(root_canvas, pixel_regions[i], grid_scale);
+            window.draw_foreground_surface(root_canvas, pixel_regions[i], grid_scale, font_glow);
             ret.push(WindowDrawDetails {
                 id: window.id,
                 region: regions[i],

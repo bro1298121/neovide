@@ -266,6 +266,40 @@ impl RenderedWindow {
         canvas: &Canvas,
         pixel_region: PixelRect<f32>,
         grid_scale: GridScale,
+        font_glow: f32,
+    ) {
+        if font_glow > 0.0 {
+            // Halo pass: draw the whole foreground into a blurred, alpha-scaled layer
+            // underneath the crisp text. sigma scales with cell height so the halo
+            // looks similar across font sizes (tunable constant 0.2).
+            let sigma = grid_scale.height() * 0.2 * font_glow;
+            let mut layer_paint = Paint::default();
+            if let Some(filter) = skia_safe::image_filters::blur((sigma, sigma), None, None, None) {
+                layer_paint.set_image_filter(filter);
+            }
+            layer_paint.set_alpha_f(font_glow);
+            // blur kernel radius ≈ 3σ: pad bounds or the halo clips at the layer edge
+            let pad = 3.0 * sigma;
+            let mut bounds = to_skia_rect(&pixel_region);
+            bounds.left -= pad;
+            bounds.top -= pad;
+            bounds.right += pad;
+            bounds.bottom += pad;
+            let rec =
+                skia_safe::canvas::SaveLayerRec::default().bounds(&bounds).paint(&layer_paint);
+            canvas.save_layer(&rec);
+            self.draw_foreground_pictures(canvas, pixel_region, grid_scale);
+            canvas.restore();
+        }
+        // crisp pass: always drawn, on top of the halo
+        self.draw_foreground_pictures(canvas, pixel_region, grid_scale);
+    }
+
+    fn draw_foreground_pictures(
+        &self,
+        canvas: &Canvas,
+        pixel_region: PixelRect<f32>,
+        grid_scale: GridScale,
     ) {
         for (matrix, line) in self.iter_border_lines_with_transform(pixel_region, grid_scale) {
             let line = line.borrow();
@@ -327,6 +361,7 @@ impl RenderedWindow {
         content_region: Option<PixelRect<f32>>,
         rightmost_window: bool,
         capture_active: bool,
+        font_glow: f32,
     ) -> WindowDrawDetails {
         let pixel_region_box = self.pixel_region(grid_scale);
         let draw_region_box = self.expanded_pixel_region(
@@ -356,7 +391,7 @@ impl RenderedWindow {
         }
 
         self.draw_background_surface(root_canvas, draw_region_box, grid_scale);
-        self.draw_foreground_surface(root_canvas, draw_region_box, grid_scale);
+        self.draw_foreground_surface(root_canvas, draw_region_box, grid_scale, font_glow);
 
         root_canvas.restore();
 

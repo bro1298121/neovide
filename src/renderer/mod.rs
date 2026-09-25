@@ -439,6 +439,8 @@ impl Renderer {
         };
 
         let settings = self.settings.get::<RendererSettings>();
+        let font_glow =
+            if settings.font_glow.is_finite() { settings.font_glow.clamp(0.0, 1.0) } else { 0.0 };
         let max_root_x = max_window_max_x(&root_windows, grid_scale);
         let root_window_regions = root_windows
             .into_iter()
@@ -452,6 +454,7 @@ impl Renderer {
                     content_region.copied(),
                     rightmost_root_window,
                     capture_active,
+                    font_glow,
                 )
             })
             .collect_vec();
@@ -465,6 +468,7 @@ impl Renderer {
                     default_background,
                     grid_scale,
                     content_region.copied(),
+                    font_glow,
                 )
             })
             .collect_vec();
