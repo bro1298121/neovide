@@ -1,13 +1,13 @@
 use std::{
     cell::RefCell,
     fmt,
-    mem::take,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
 };
 
 use log::trace;
+use approx::AbsDiffEq;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use rustc_hash::FxHashMap;
 use winit::{
@@ -16,8 +16,6 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoopProxy},
     window::{Cursor, Fullscreen, Theme, Window, WindowId},
 };
-
-use approx::AbsDiffEq;
 
 #[cfg(target_os = "windows")]
 use super::settings::CornerPreference;
@@ -47,14 +45,14 @@ use crate::{
     CmdLineSettings,
     bridge::{
         NeovimHandler, NeovimRuntime, OpenArgs, OpenMode, ParallelCommand, RestartDetails,
-        SerialCommand, StartupMessage, send_ui, set_active_route_handler, unregister_route_handler,
+        SerialCommand, send_ui, set_active_route_handler, unregister_route_handler,
     },
     clipboard::ClipboardHandle,
     cmd_line::{GeometryArgs, MouseCursorIcon},
     profiling::{tracy_frame, tracy_gpu_collect, tracy_gpu_zone, tracy_plot, tracy_zone},
     renderer::{
-        DrawCommand, DrawCommandResult, MessageSelection, Renderer, RendererSettingsChanged,
-        SkiaRenderer, StartupMessageFlush, VSync, create_skia_renderer,
+        DrawCommand, MessageSelection, Renderer, RendererSettingsChanged, SkiaRenderer, VSync,
+        create_skia_renderer,
     },
     running_tracker::RunningTracker,
     settings::{
@@ -76,27 +74,6 @@ use {
 };
 
 const GRID_TOLERANCE: f32 = 1e-3;
-
-impl StartupMessageFlush {
-    fn into_command(self, messages: Vec<StartupMessage>) -> Option<ParallelCommand> {
-        match self {
-            Self::Replay if messages.is_empty() => None,
-            Self::Replay => Some(ParallelCommand::ReplayStartupMessages { messages }),
-            Self::RestoreMessageUi => Some(ParallelCommand::FlushStartupMessages { messages }),
-        }
-    }
-}
-
-fn flush_startup_messages_if_ready(result: &mut DrawCommandResult, neovim_handler: &NeovimHandler) {
-    let Some(flush) = result.startup_message_flush else {
-        return;
-    };
-
-    let messages = take(&mut result.startup_messages);
-    if let Some(command) = flush.into_command(messages) {
-        send_ui(command, neovim_handler);
-    }
-}
 
 fn round_or_op<Op: FnOnce(f32) -> f32>(v: f32, op: Op) -> f32 {
     let rounded = v.round();
@@ -1930,15 +1907,10 @@ impl WinitWindowWrapper {
             return;
         };
 
-        let mut handle_draw_commands_result = {
+        let handle_draw_commands_result = {
             let mut renderer = route.window.renderer.borrow_mut();
             renderer.handle_draw_commands(batch)
         };
-
-        flush_startup_messages_if_ready(
-            &mut handle_draw_commands_result,
-            &route.window.neovim_handler,
-        );
 
         if let Some(route) = self.routes.get_mut(&window_id) {
             route.state.font_changed_last_frame |= handle_draw_commands_result.font_changed;
@@ -1964,16 +1936,12 @@ impl WinitWindowWrapper {
             return;
         };
 
-        let mut handle_draw_commands_result = {
+        let handle_draw_commands_result = {
             let mut renderer = route_core.renderer.borrow_mut();
             renderer.handle_draw_commands(batch)
         };
 
         route_core.font_changed_last_frame |= handle_draw_commands_result.font_changed;
-        flush_startup_messages_if_ready(
-            &mut handle_draw_commands_result,
-            &route_core.neovim_handler,
-        );
 
         if handle_draw_commands_result.should_show {
             route_core.should_show_observed = true;
