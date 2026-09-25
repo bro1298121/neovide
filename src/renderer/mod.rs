@@ -113,6 +113,7 @@ pub struct RendererSettings {
     underline_stroke_scale: f32,
     text_gamma: f32,
     text_contrast: f32,
+    font_glow: f32,
     experimental_layer_grouping: bool,
     pixel_geometry: PixelGeometry,
 }
@@ -136,6 +137,7 @@ impl Default for RendererSettings {
             underline_stroke_scale: 1.,
             text_gamma: 0.0,
             text_contrast: 0.5,
+            font_glow: 0.0,
             experimental_layer_grouping: false,
             pixel_geometry: PixelGeometry::default(),
         }

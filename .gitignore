@@ -11,3 +11,4 @@ flake.nix
 flake.lock
 .direnv/
 .devenv/
+.slim/deepwork/
