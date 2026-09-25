@@ -167,6 +167,25 @@ a gamma of 0.8 and a contrast of 0.1.
 Note a gamma of 0.0, means standard sRGB gamma or 2.2. Also note that these settings don't
 necessarily apply immediately due to caching of the fonts.
 
+#### Font glow
+
+VimScript:
+
+```vim
+let g:neovide_font_glow = 0.0
+```
+
+Lua:
+
+```lua
+vim.g.neovide_font_glow = 0.0
+```
+
+Renders a soft glow (halo) around the text. The value ranges from `0.0` (disabled,
+the default) to `1.0` (strongest glow). The glow color matches the text color, and
+its softness scales with the font size. Recommended values are between `0.3` and
+`0.8`.
+
 #### Pixel geometry
 
 VimScript:

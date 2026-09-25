@@ -43,6 +43,7 @@ pub enum TrailMode {
     Railgun,
     Torpedo,
     PixieDust,
+    Laser,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +66,7 @@ impl ParseFromValue for VfxMode {
                 "railgun" => VfxMode::Trail(TrailMode::Railgun),
                 "torpedo" => VfxMode::Trail(TrailMode::Torpedo),
                 "pixiedust" => VfxMode::Trail(TrailMode::PixieDust),
+                "laser" => VfxMode::Trail(TrailMode::Laser),
                 "" => VfxMode::Disabled,
                 value => {
                     error!("Expected a VfxMode name, but received {value:?}");
@@ -109,6 +111,7 @@ impl From<VfxMode> for Value {
             VfxMode::Trail(TrailMode::Railgun) => Value::from("railgun"),
             VfxMode::Trail(TrailMode::Torpedo) => Value::from("torpedo"),
             VfxMode::Trail(TrailMode::PixieDust) => Value::from("pixiedust"),
+            VfxMode::Trail(TrailMode::Laser) => Value::from("laser"),
             VfxMode::Disabled => Value::from(""),
         }
     }
@@ -343,11 +346,23 @@ impl CursorVfx for ParticleTrail {
                             let dir = PixelVec::new(base_dir.x * 0.5, 0.4 + base_dir.y.abs());
                             dir * 3.0 * settings.vfx_particle_speed
                         }
+                        TrailMode::Laser => {
+                            let travel_dir = if travel_distance > 1e-3 {
+                                travel.normalize()
+                            } else {
+                                PixelVec::new(1.0, 0.0)
+                            };
+                            let perp = PixelVec::new(-travel_dir.y, travel_dir.x);
+                            let jitter = (self.rng.next_f32() - 0.5) * cursor_dimensions.height * 0.15;
+                            let dir = travel_dir + perp * jitter;
+                            dir.normalize() * (settings.vfx_particle_speed * 4.0) 
+                        }
                     };
 
                     // Distribute particles along the travel distance
                     let pos = match self.trail_mode {
                         TrailMode::Railgun => prev_p + travel * t,
+                        TrailMode::Laser => prev_p + travel * t,
                         TrailMode::PixieDust | TrailMode::Torpedo => {
                             prev_p
                                 + travel * self.rng.next_f32()
@@ -357,18 +372,22 @@ impl CursorVfx for ParticleTrail {
 
                     let rotation_speed = match self.trail_mode {
                         TrailMode::Railgun => std::f32::consts::PI * settings.vfx_particle_curl,
+                        TrailMode::Laser => 0.0,
                         TrailMode::PixieDust | TrailMode::Torpedo => {
                             (self.rng.next_f32() - 0.5)
                                 * std::f32::consts::FRAC_PI_2
                                 * settings.vfx_particle_curl
                         }
                     };
-
+                    let lifetime = match self.trail_mode {
+                        TrailMode::Laser => t * settings.vfx_particle_lifetime * 1.5,  // 激光拖尾更长
+                        _ => t * settings.vfx_particle_lifetime,
+                    };
                     self.add_particle(
                         pos,
                         speed,
                         rotation_speed,
-                        t * settings.vfx_particle_lifetime,
+                        lifetime,
                         base_color,
                     );
                 }
@@ -416,6 +435,7 @@ impl CursorVfx for ParticleTrail {
             let radius = match self.trail_mode {
                 TrailMode::Torpedo | TrailMode::Railgun => font_dimensions.width * 0.5 * lifetime,
                 TrailMode::PixieDust => font_dimensions.width * 0.2,
+                TrailMode::Laser => font_dimensions.width * 0.25 * lifetime,
             };
 
             let hr = radius * 0.5;
@@ -427,6 +447,13 @@ impl CursorVfx for ParticleTrail {
                 }
                 TrailMode::PixieDust => {
                     canvas.draw_rect(rect, &paint);
+                }
+                TrailMode::Laser => {
+                    paint.set_style(Style::Fill);
+                    let lw = font_dimensions.width * 0.18 * lifetime; 
+                    let hr = lw * 0.5;
+                    let lrect = Rect::from_xywh(particle.pos.x - hr, particle.pos.y - hr, lw, lw);
+                    canvas.draw_rect(lrect, &paint);
                 }
             }
         });

@@ -34,6 +34,12 @@ use winit::platform::windows::WindowAttributesExtWindows;
 #[cfg(target_os = "macos")]
 use winit::platform::macos::EventLoopBuilderExtMacOS;
 
+#[cfg(target_os = "windows")]
+use windows::Win32::{
+    Foundation::HWND,
+    Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWM_SYSTEMBACKDROP_TYPE},
+};
+
 use image::{GenericImageView, Pixel, load_from_memory};
 use keyboard_manager::KeyboardManager;
 use mouse_manager::MouseManager;
@@ -57,7 +63,7 @@ pub use application::Application;
 pub use application::ShouldRender;
 pub use error_window::show_error_window;
 pub use mouse_manager::{MessageSelectionEvent, OverlayEvent};
-pub use settings::{ThemeSettings, WindowSettings, WindowSettingsChanged};
+pub use settings::{ThemeSettings, WindowBackdrop, WindowSettings, WindowSettingsChanged};
 pub use window_wrapper::WinitWindowWrapper;
 
 static DEFAULT_ICON: &[u8] = include_bytes!("../../assets/neovide.ico");
@@ -373,7 +379,52 @@ pub fn create_window(
         window_config.window.set_outer_position(previous_position);
     }
 
-    window_config
+// Windows 系统级毛玻璃（Mica Alt 扩展到客户区）
+    #[cfg(target_os = "windows")]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
+
+        if let Ok(handle) = window_config.window.window_handle() {
+            if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+                let hwnd = HWND(win32_handle.hwnd.get() as _);
+                
+                // 4 = Mica Alt
+                let backdrop = DWM_SYSTEMBACKDROP_TYPE(4);
+                
+                unsafe {
+                    // 1. 设置 Mica Alt
+                    let _ = DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWA_SYSTEMBACKDROP_TYPE,
+                        &backdrop as *const _ as *const std::ffi::c_void,
+                        std::mem::size_of::<DWM_SYSTEMBACKDROP_TYPE>() as u32,
+                    );
+
+                    // 2. 关键：让 Mica 扩展到整个客户区
+                    let use_host_backdrop = 1u32; // TRUE
+                    let _ = DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWINDOWATTRIBUTE(17), // DWMWA_USE_HOSTBACKDROPBRUSH
+                        &use_host_backdrop as *const _ as *const std::ffi::c_void,
+                        std::mem::size_of::<u32>() as u32,
+                    );
+
+                    // 3. 可选：禁用窗口圆角，让 Mica 铺满
+                    let round_preference = 1u32; // DWMWCP_DONOTROUND
+                    let _ = DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWINDOWATTRIBUTE(33), // DWMWA_WINDOW_CORNER_PREFERENCE
+                        &round_preference as *const _ as *const std::ffi::c_void,
+                        std::mem::size_of::<u32>() as u32,
+                    );
+                }
+            }
+        }
+    }
+
+    window_config  // <-- 确保这行存在
+    
 }
 
 #[derive(Clone, Debug)]

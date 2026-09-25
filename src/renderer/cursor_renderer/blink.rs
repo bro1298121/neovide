@@ -17,12 +17,10 @@ pub struct BlinkStatus {
 }
 
 fn is_static(cursor: &Cursor) -> bool {
-    // The documentations says that if any state is zero there's no blinking
-    // But blinkwait shuld be allowed to be 0, see https://github.com/neovim/neovim/issues/31687
-    cursor.blinkoff == Some(0)
-        || cursor.blinkoff.is_none()
-        || cursor.blinkon == Some(0)
-        || cursor.blinkon.is_none()
+    // 只有当明确设为 0 时才禁用闪烁
+    // blinkwait 可以为 0（允许立即开始闪烁）
+    // 如果 blinkon 或 blinkoff 为 None，表示未设置，不应视为禁用
+    cursor.blinkoff == Some(0) || cursor.blinkon == Some(0)
 }
 
 impl BlinkStatus {
@@ -38,7 +36,7 @@ impl BlinkStatus {
         let delay_ms = if let Some(c) = &self.current_cursor {
             match self.state {
                 BlinkState::Waiting => c.blinkwait.unwrap_or(0),
-                BlinkState::Off => c.blinkoff.unwrap_or(0),
+                BlinkState::Off => c.blinkoff.unwrap_or(c.blinkon.unwrap_or(0)),  // fallback to blinkon
                 BlinkState::On => c.blinkon.unwrap_or(0),
             }
         } else {
@@ -86,13 +84,15 @@ impl BlinkStatus {
     /// `0.0` is fully transparent, `1.0` is fully opaque.
     pub fn opacity(&self) -> f32 {
         let now = Instant::now();
-        if self.state == BlinkState::Waiting {
-            return 1.0;
-        }
         let total = self.get_delay().as_secs_f32();
         let remaining = (self.transition_time - now).as_secs_f32();
         match self.state {
-            BlinkState::Waiting => 1.0,
+            BlinkState::Waiting => {
+                if total == 0.0 {
+                    return 1.0;
+                }
+                (1.0 - remaining / total).clamp(0.0, 1.0)
+            }
             BlinkState::On => (remaining / total).clamp(0.0, 1.0),
             BlinkState::Off => (1.0 - remaining / total).clamp(0.0, 1.0),
         }
@@ -102,7 +102,7 @@ impl BlinkStatus {
     /// smooth blink is enabled).
     pub fn should_animate(&self) -> bool {
         match self.state {
-            BlinkState::Waiting => false,
+            BlinkState::Waiting => true,
             BlinkState::On | BlinkState::Off => true,
         }
     }

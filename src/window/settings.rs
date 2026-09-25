@@ -32,6 +32,9 @@ pub struct WindowSettings {
     pub touch_deadzone: f32,
     pub touch_drag_timeout: f32,
     pub window_blurred: bool,
+    pub blur_opacity: f32,
+    #[cfg(target_os = "windows")]
+    pub window_backdrop: WindowBackdrop,
     pub message_area_drag_selection: bool,
     #[cfg(target_os = "windows")]
     pub corner_preference: CornerPreference,
@@ -82,7 +85,10 @@ impl Default for WindowSettings {
             touch_deadzone: 6.0,
             touch_drag_timeout: 0.17,
             window_blurred: false,
+            blur_opacity: 0.85,
             message_area_drag_selection: true,
+            #[cfg(target_os = "windows")]
+            window_backdrop: WindowBackdrop::Mica,
             #[cfg(target_os = "windows")]
             corner_preference: CornerPreference::Default,
             #[cfg(target_os = "macos")]
@@ -199,6 +205,49 @@ impl From<CornerPreference> for winit::platform::windows::CornerPreference {
             CornerPreference::Round => WinitCornerPreference::Round,
             CornerPreference::RoundSmall => WinitCornerPreference::RoundSmall,
             CornerPreference::DoNotRound => WinitCornerPreference::DoNotRound,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(target_os = "windows")]
+pub enum WindowBackdrop {
+    Mica,
+    MicaAlt,
+    Acrylic,
+    Aero,
+}
+
+#[cfg(target_os = "windows")]
+impl ParseFromValue for WindowBackdrop {
+    fn parse_from_value(&mut self, value: Value) {
+        if value.is_str() {
+            *self = match value.as_str().unwrap() {
+                "mica" => WindowBackdrop::Mica,
+                "mica_alt" => WindowBackdrop::MicaAlt,
+                "acrylic" => WindowBackdrop::Acrylic,
+                "aero" => WindowBackdrop::Aero,
+                value => {
+                    error_msg!(
+                        "Setting WindowBackdrop expected one of `mica`, `mica_alt`, `acrylic`, `aero`, but received {value:?}"
+                    );
+                    return;
+                }
+            };
+        } else {
+            error_msg!("Setting WindowBackdrop expected string, but received {value:?}");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl From<WindowBackdrop> for Value {
+    fn from(value: WindowBackdrop) -> Self {
+        match value {
+            WindowBackdrop::Mica => Value::from("mica"),
+            WindowBackdrop::MicaAlt => Value::from("mica_alt"),
+            WindowBackdrop::Acrylic => Value::from("acrylic"),
+            WindowBackdrop::Aero => Value::from("aero"),
         }
     }
 }

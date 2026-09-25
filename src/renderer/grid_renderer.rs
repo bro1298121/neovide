@@ -117,10 +117,66 @@ impl GridRenderer {
         self.default_style.colors.background.unwrap().to_color()
     }
 
+    fn window_blurred_opacity_cap(&self, blur_opacity: f32) -> f32 {
+        #[cfg(target_os = "windows")]
+        {
+            let backdrop = self.settings.get::<WindowSettings>().window_backdrop;
+            if backdrop == crate::window::WindowBackdrop::Aero {
+                return blur_opacity.min(0.8);
+            }
+            if backdrop == crate::window::WindowBackdrop::Acrylic {
+                return blur_opacity.min(0.8);
+            }
+        }
+        blur_opacity
+    }
+
+    /// WinUI3 原生亚克力（AcrylicInAppBrush）的色调。
+    ///
+    /// Windows 11 的 DWM 已经在窗口后面画好了真实的亚克力（模糊 + 噪点），
+    /// 这里只把渲染器盖在上面的背景颜色换成 WinUI 相同的深浅色卡，
+    /// 避免透出配色方案的彩色背景。
+    ///
+    /// - 浅色主题：`#FCFCFC`
+    /// - 深色主题：`#2C2C2C`
+    ///
+    /// 用默认背景色的亮度来近似深浅主题。
+    #[cfg(target_os = "windows")]
+    fn acrylic_tint_color(&self) -> Option<Color> {
+        let window_settings = self.settings.get::<WindowSettings>();
+        if !window_settings.window_blurred
+            || window_settings.window_backdrop != crate::window::WindowBackdrop::Acrylic
+        {
+            return None;
+        }
+        let background = self.get_default_background_color();
+        let luminance = 0.2126 * background.r() as f32
+            + 0.7152 * background.g() as f32
+            + 0.0722 * background.b() as f32;
+        if luminance > 255.0 * 0.55 {
+            Some(Color::from_rgb(0xFC, 0xFC, 0xFC))
+        } else {
+            Some(Color::from_rgb(0x2C, 0x2C, 0x2C))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn acrylic_tint_color(&self) -> Option<Color> {
+        None
+    }
+
     pub fn get_default_background(&self, opacity: f32) -> Color {
-        log::info!("blend {}", self.default_style.blend);
-        let alpha = opacity * (100 - self.default_style.blend) as f32 / 100.0;
-        self.get_default_background_color().with_a((alpha * 255.0) as u8)
+        let window_settings = self.settings.get::<WindowSettings>();
+        let base_alpha = (100 - self.default_style.blend) as f32 / 100.0 * opacity;
+        let blur_cap = self.window_blurred_opacity_cap(window_settings.blur_opacity);
+        let alpha = if window_settings.window_blurred {
+            base_alpha.min(blur_cap)
+        } else {
+            base_alpha
+        };
+        let color =
+            self.acrylic_tint_color().unwrap_or_else(|| self.get_default_background_color());
+        color.with_a((alpha * 255.0) as u8)
     }
 
     pub fn background_paint_color(&self, style: &Option<Arc<Style>>, opacity: f32) -> Color4f {
@@ -134,14 +190,24 @@ impl GridRenderer {
 
         let is_default_background = style_background == self.get_default_background_color();
         let normal_opacity = self.settings.get::<WindowSettings>().normal_opacity;
+        let window_settings = self.settings.get::<WindowSettings>();
 
-        let alpha = if normal_opacity < 1.0 && is_default_background {
-            normal_opacity
-        } else if style.blend > 0 {
-            ((100 - style.blend) as f32 / 100.0) * opacity
-        } else {
-            opacity
-        };
+        let alpha =
+            if window_settings.window_blurred && is_default_background && normal_opacity >= 1.0 {
+                opacity.min(self.window_blurred_opacity_cap(window_settings.blur_opacity))
+            } else if normal_opacity < 1.0 && is_default_background {
+                normal_opacity
+            } else if style.blend > 0 {
+                ((100 - style.blend) as f32 / 100.0) * opacity
+            } else {
+                opacity
+            };
+
+        if let Some(tint) = self.acrylic_tint_color() {
+            if is_default_background {
+                paint.set_color(tint);
+            }
+        }
 
         paint.set_alpha_f(alpha);
         paint.color4f()
@@ -181,14 +247,26 @@ impl GridRenderer {
 
         let is_default_background = style_background == self.get_default_background_color();
         let normal_opacity = self.settings.get::<WindowSettings>().normal_opacity;
+        let window_settings = self.settings.get::<WindowSettings>();
 
-        let alpha = if normal_opacity < 1.0 && is_default_background {
-            normal_opacity
-        } else if style.blend > 0 {
-            ((100 - style.blend) as f32 / 100.0) * opacity
-        } else {
-            opacity
-        };
+        if !debug {
+            if let Some(tint) = self.acrylic_tint_color() {
+                if is_default_background {
+                    paint.set_color(tint);
+                }
+            }
+        }
+
+        let alpha =
+            if window_settings.window_blurred && is_default_background && normal_opacity >= 1.0 {
+                opacity.min(self.window_blurred_opacity_cap(window_settings.blur_opacity))
+            } else if normal_opacity < 1.0 && is_default_background {
+                normal_opacity
+            } else if style.blend > 0 {
+                ((100 - style.blend) as f32 / 100.0) * opacity
+            } else {
+                opacity
+            };
         paint.set_alpha_f(alpha);
 
         let custom_color = paint.color4f() != self.default_style.colors.background.unwrap();

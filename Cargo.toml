@@ -1,6 +1,6 @@
 [package]
 name = "neovide"
-version = "0.16.2"
+version = "0.16.3"
 edition = "2024"
 description = "Neovide: No Nonsense Neovim Gui"
 homepage = "https://neovide.dev/"
@@ -43,6 +43,7 @@ osx_minimum_system_version = "10.11"
 
 [workspace]
 members = ["neovide-derive"]
+
 
 [dependencies]
 anyhow = { version = "1.0.95", features = ["backtrace"] }
@@ -194,17 +195,22 @@ csscolorparser = "0.7.0"
 skia-safe = { version = "=0.153.3", features = ["d3d", "gl", "textlayout"] }
 # This needs to match the version used by skia
 windows = { version = "0.62.0", features = [
+  "Win32_Foundation",
   "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",
   "Win32_Graphics_DirectComposition",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Dxgi",
   "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_System_Console",
   "Win32_System_Performance",
   "Win32_System_Threading",
+  "Win32_UI_Controls",
   "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 windows-registry = "0.6.1"
 wslpath-rs = "0.2"
