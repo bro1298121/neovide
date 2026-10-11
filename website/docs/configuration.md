@@ -1157,7 +1157,7 @@ vim.g.neovide_cursor_trail_corner_timing = "rank"
 
 Setting `g:neovide_cursor_trail_corner_timing` controls the animation timing of the four
 corners during a cursor trail, that is, which corners lead and which lag behind. It accepts
-one of two string values.
+one of three string values.
 
 With `"rank"` (the default), Neovide keeps its original cursor trail timing: the corners
 are ranked by their alignment with the movement direction, the leading corners in ranks 2
@@ -1169,9 +1169,66 @@ duration based on that corner's alignment with the movement direction (0 = not a
 all = trailing duration, 1 = fully aligned = leading duration), after the four alignments
 are normalized to 0..1. This makes the trail more natural and coherent when moving diagonally.
 
+With `"alignment2"`, the timing builds on the alignment calculation but adds a shear term
+perpendicular to the cursor's movement direction. With plain alignment, a purely horizontal
+or vertical movement makes two pairs of corners share the same alignment value, so the four
+corners collapse into just two durations, the trailing edge moves as one solid block, and the
+trail looks like a stiff bar. The shear term pushes each corner's shear axis away from the
+movement axis, spreading the four corners back across the full duration range and skewing the
+trailing edge, which makes horizontal movement feel coherent again. Diagonal movement also
+benefits: a perfectly diagonal movement makes the two middle corners coincide under alignment,
+and alignment2 separates them. The shear term spreads the four corners apart by a proportion of
+the jump distance, so longer jumps spread further. When wrapping a line in insert mode, a
+horizontal jump can span a whole line, tens of cells, while a cell is only one row tall, so that
+proportional difference turns into a real offset of dozens of cells and the quadrilateral is
+twisted into a thin diagonal spike. To prevent this, the shear is attenuated as the jump grows
+longer, so that the deviation between the two corners of an edge never exceeds the limit set by
+`g:neovide_cursor_max_edge_skew`. The shorter the jump, the closer the shear stays to its full
+value, and the longer the jump, the closer it gets to zero. Because the attenuation happens
+before normalization rather than clamping the four corners afterwards, the span between the
+leading and trailing corners is left untouched and the trail length stays complete; clamping
+after normalization would also compress that span and cut the trail length in half. The result
+is that short jumps keep the full four-corner shear, while long jumps such as a full-line wrap
+fall back to a clean leading edge and a clean trailing edge with an unchanged trail length, and
+the spike disappears. The arrival order still matches `"rank"` for purely horizontal movement
+(bottom-right, then top-right, then bottom-left, then top-left, that is the right edge first and
+the left edge upward). The only differences from `"alignment"` are the size of the shear term
+and its automatic attenuation for long jumps; the two remain equally continuous.
+
 The `g:neovide_cursor_trail_size` setting determines the difference between the leading and
 trailing durations, while this setting determines how that difference is distributed among
 the four corners.
+
+#### Max Edge Skew
+
+VimScript:
+
+```vim
+let g:neovide_cursor_max_edge_skew = 0.5
+```
+
+Lua:
+
+```lua
+vim.g.neovide_cursor_max_edge_skew = 0.5
+```
+
+Setting `g:neovide_cursor_max_edge_skew` limits how far, in cells, the two corners of an edge
+of the cursor can drift apart while the cursor quad is being animated. It works with the shear
+term of the `"alignment2"` cursor trail corner timing: that shear spreads the four corners in
+proportion to the jump distance, so a longer jump would otherwise skew the quad until it looks
+like a thin diagonal spike. The shear is attenuated as the jump grows longer, so that the
+actual drift stays within this limit: the shorter the jump, the closer the shear stays to its
+full value, and the longer the jump, the more it gives way to a clean, squared-off edge.
+
+Raising the value makes the shear fade earlier, so long jumps keep a rectangular edge, but it
+also trims more of the four-corner shear from short moves and makes them less coherent. Lowering
+it, or leaving it at `0`, keeps the trail more coherent and closer to the original `"rank"`
+feel, but long jumps such as a full-line wrap are more likely to show the skewed edge spike.
+
+Setting `g:neovide_cursor_max_edge_skew` to `0` means no limit at all: the shear never fades and
+the trail is at its most coherent, at the cost of the diagonal edge spike on long jumps. The
+default, `0.5`, means that jumps longer than roughly 1.5 cells start to fade the shear.
 
 #### Antialiasing
 

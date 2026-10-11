@@ -16,7 +16,8 @@ use crate::{
     renderer::{GridRenderer, RenderedWindow, animation_utils::*},
     settings::{ParseFromValue, Settings},
     units::{
-        GridPos, GridScale, GridSize, PixelPos, PixelRect, PixelSize, PixelVec, to_skia_point,
+        GridPos, GridScale, GridSize, GridVec, PixelPos, PixelRect, PixelSize, PixelVec,
+        to_skia_point,
     },
     window::ShouldRender,
 };
@@ -66,6 +67,11 @@ pub enum CornerTiming {
     /// Every corner interpolates between the trailing and the leading animation length based on how
     /// well it is aligned with the direction of travel.
     Alignment,
+    /// Like [`CornerTiming::Alignment`], but the alignment is mixed with the perpendicular
+    /// component of the corner so that the four corners keep spreading across the whole animation
+    /// length during axis aligned movement, where the plain alignment collapses them into a
+    /// leading and a trailing group.
+    Alignment2,
 }
 
 impl ParseFromValue for CornerTiming {
@@ -74,6 +80,7 @@ impl ParseFromValue for CornerTiming {
             *self = match value.as_str().unwrap() {
                 "rank" => CornerTiming::Rank,
                 "alignment" => CornerTiming::Alignment,
+                "alignment2" => CornerTiming::Alignment2,
                 value => {
                     log::error!("Expected a CornerTiming name, but received {value:?}");
                     return;
@@ -90,6 +97,7 @@ impl From<CornerTiming> for Value {
         match timing {
             CornerTiming::Rank => Value::from("rank"),
             CornerTiming::Alignment => Value::from("alignment"),
+            CornerTiming::Alignment2 => Value::from("alignment2"),
         }
     }
 }
@@ -104,6 +112,29 @@ enum CornerTrail {
     Alignment(f32),
 }
 
+/// Scales the alignment2 shear so that the corners of a single edge never drift more than
+/// `max_edge_skew` cells apart.
+///
+/// The shear spreads the corners as a fraction of the jump, so on a long jump, such as the line
+/// wrap of a whole line in insert mode, the drift between the corners of one edge becomes dozens of
+/// cells and the quad twists into a thin diagonal spike. Damping the shear instead of capping the
+/// corners afterwards keeps the leading to trailing spread, and therefore the length of the trail,
+/// untouched while the edges stay square.
+///
+/// A `max_edge_skew` of zero or less means the drift is not limited at all, which keeps the shear at
+/// full strength for every jump.
+fn alignment2_shear_scale(jump: GridVec<f32>, max_edge_skew: f32) -> f32 {
+    if max_edge_skew <= 0.0 {
+        return 1.0;
+    }
+
+    // The shear widens the range the corners get normalized over, so it spreads them by this
+    // fraction of the jump.
+    let spread = ALIGNMENT2_SHEAR / (1.0 + ALIGNMENT2_SHEAR);
+
+    (max_edge_skew / (spread * jump.length())).min(1.0)
+}
+
 #[derive(SettingGroup)]
 #[setting_prefix = "cursor"]
 #[derive(Clone)]
@@ -116,6 +147,7 @@ pub struct CursorSettings {
     animate_command_line: bool,
     trail_size: f32,
     trail_corner_timing: CornerTiming,
+    max_edge_skew: f32,
     smear_gradient: bool,
     unfocused_outline_width: f32,
     smooth_blink: bool,
@@ -142,6 +174,7 @@ impl Default for CursorSettings {
             animate_command_line: true,
             trail_size: 1.0,
             trail_corner_timing: CornerTiming::default(),
+            max_edge_skew: 0.5,
             smear_gradient: false,
             unfocused_outline_width: 1.0 / 8.0,
             smooth_blink: false,
@@ -265,12 +298,22 @@ impl Corner {
         destination + relative_scaled_position.to_vector()
     }
 
+    /// The destination of the cursor center at the time this corner last moved, reconstructed from
+    /// where this corner was sent.
+    fn previous_center_destination(&self, cursor_dimensions: GridScale) -> PixelPos<f32> {
+        let relative_scaled_position = self.relative_position * cursor_dimensions;
+
+        self.previous_destination - relative_scaled_position.to_vector()
+    }
+
+    /// Calculates how far each corner sits in front of and beside the direction of motion, as the
+    /// component of the corner direction along the travel direction and the perpendicular one.
     fn calculate_direction_alignment(
         &self,
         cursor_dimensions: GridScale,
         destination: PixelPos<f32>,
         timing: CornerTiming,
-    ) -> f32 {
+    ) -> (f32, f32) {
         // Calculate how much a corner will be lagging behind based on how much it's aligned
         // with the direction of motion. Corners in front will move faster than corners in the
         // back
@@ -279,17 +322,22 @@ impl Corner {
         //(center_destination- corner.current_position).length()
         let corner_direction = self.relative_position.as_vector().normalize().cast();
         let travel_direction = {
-            // The alignment timing measures the travel direction against the previous destination
+            // The alignment timings measure the travel direction against the previous destination
             // instead of the current position, so that a corner which is still lagging behind
             // doesn't skew its own alignment.
             let origin = match timing {
                 CornerTiming::Rank => self.current_position,
-                CornerTiming::Alignment => self.previous_destination,
+                CornerTiming::Alignment | CornerTiming::Alignment2 => self.previous_destination,
             };
             let d = corner_destination - origin;
             d.normalize()
         };
-        travel_direction.dot(corner_direction)
+        (
+            travel_direction.dot(corner_direction),
+            // The signed perpendicular component, used to shear the stagger off the direction of
+            // travel.
+            travel_direction.x * corner_direction.y - travel_direction.y * corner_direction.x,
+        )
     }
 }
 
@@ -547,16 +595,29 @@ impl CursorRenderer {
                 || !settings.animate_command_line && !changed_to_from_cmdline;
             if self.jumped {
                 let timing = settings.trail_corner_timing;
-                // Calculate how well each corner is aligned with the direction of travel
-                let alignments = self
+                // All corners share the same jump, they only differ by their position within the
+                // cursor. The shear is damped with its length, so it has to be known upfront.
+                let grid_scale: GridScale = cursor_dimensions.into();
+                let jump = (self.destination
+                    - self.corners[0].previous_center_destination(grid_scale))
+                    / grid_scale;
+                let shear = ALIGNMENT2_SHEAR * alignment2_shear_scale(jump, settings.max_edge_skew);
+
+                // Calculate how well each corner is aligned with the direction of travel, and how
+                // far it sits to the side of it
+                let corner_values = self
                     .corners
                     .iter()
                     .map(|corner| {
-                        corner.calculate_direction_alignment(
+                        let (alignment, perpendicular) = corner.calculate_direction_alignment(
                             cursor_dimensions.into(),
                             center_destination,
                             timing,
-                        )
+                        );
+                        match timing {
+                            CornerTiming::Alignment2 => alignment + shear * perpendicular,
+                            _ => alignment,
+                        }
                     })
                     .collect_array::<4>()
                     .unwrap();
@@ -566,13 +627,13 @@ impl CursorRenderer {
                     // the front and which is the back
                     CornerTiming::Rank => {
                         let mut corner_ranks = [0; 4];
-                        alignments
+                        corner_values
                             .iter()
                             .copied()
                             .enumerate()
-                            .sorted_by(|(id_a, alignment_a), (id_b, alignment_b)| {
-                                alignment_a
-                                    .partial_cmp(alignment_b)
+                            .sorted_by(|(id_a, value_a), (id_b, value_b)| {
+                                value_a
+                                    .partial_cmp(value_b)
                                     .unwrap_or(std::cmp::Ordering::Equal)
                                     .then(id_a.cmp(id_b))
                             })
@@ -580,23 +641,24 @@ impl CursorRenderer {
                             .for_each(|(rank, (id, _))| corner_ranks[id] = rank);
                         corner_ranks.map(CornerTrail::Rank)
                     }
-                    // Normalize the alignments into the 0.0 to 1.0 range so that the most trailing
+                    // Normalize the values into the 0.0 to 1.0 range so that the most trailing
                     // corner gets 0.0 and the most leading one gets 1.0
-                    CornerTiming::Alignment => {
-                        let min = alignments.iter().copied().fold(f32::INFINITY, f32::min);
-                        let max = alignments.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                    CornerTiming::Alignment | CornerTiming::Alignment2 => {
+                        let min = corner_values.iter().copied().fold(f32::INFINITY, f32::min);
+                        let max = corner_values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                         let range = max - min;
-                        alignments.map(|alignment| {
-                            let normalized = (alignment - min) / range;
-                            // A zero range means that every corner is equally aligned, so they
-                            // all get the leading animation length.
-                            let normalized = if normalized.is_finite() {
-                                normalized.clamp(0.0, 1.0)
-                            } else {
-                                1.0
-                            };
-                            CornerTrail::Alignment(normalized)
-                        })
+                        corner_values
+                            .map(|value| {
+                                let normalized = (value - min) / range;
+                                // A zero range means that every corner is equally aligned, so they
+                                // all get the leading animation length.
+                                if normalized.is_finite() {
+                                    normalized.clamp(0.0, 1.0)
+                                } else {
+                                    1.0
+                                }
+                            })
+                            .map(CornerTrail::Alignment)
                     }
                 };
 
