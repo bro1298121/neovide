@@ -1141,6 +1141,38 @@ Setting `g:neovide_cursor_trail_size` changes how much the back of the cursor tr
 to 1.0 to make the front jump to the destination immediately with a maximum trail size. A lower
 value makes a smoother animation, with a shorter trail, but also adds lag.
 
+#### Cursor Trail Corner Timing
+
+VimScript:
+
+```vim
+let g:neovide_cursor_trail_corner_timing = "rank"
+```
+
+Lua:
+
+```lua
+vim.g.neovide_cursor_trail_corner_timing = "rank"
+```
+
+Setting `g:neovide_cursor_trail_corner_timing` controls the animation timing of the four
+corners during a cursor trail, that is, which corners lead and which lag behind. It accepts
+one of two string values.
+
+With `"rank"` (the default), Neovide keeps its original cursor trail timing: the corners
+are ranked by their alignment with the movement direction, the leading corners in ranks 2
+and 3 move fastest, rank 1 is in between, and the trailing corners in rank 0 move slowest.
+
+With `"alignment"`, the improved timing is used. Each corner's animation duration is
+linearly interpolated between the trailing corner duration and the leading corner
+duration based on that corner's alignment with the movement direction (0 = not aligned at
+all = trailing duration, 1 = fully aligned = leading duration), after the four alignments
+are normalized to 0..1. This makes the trail more natural and coherent when moving diagonally.
+
+The `g:neovide_cursor_trail_size` setting determines the difference between the leading and
+trailing durations, while this setting determines how that difference is distributed among
+the four corners.
+
 #### Antialiasing
 
 VimScript:
