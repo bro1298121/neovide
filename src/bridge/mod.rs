@@ -31,7 +31,7 @@ pub use handler::NeovimHandler;
 use itertools::Itertools;
 use log::info;
 use mundy::{Interest, Preferences};
-use nvim_rs::{Neovim, UiAttachOptions, Value, error::CallError};
+use nvim_rs::{Neovim, UiAttachOptions, Value, call_args, error::CallError, rpc::IntoVal};
 use rmpv::Utf8String;
 use session::{NeovimInstance, NeovimSession};
 use setup::{get_api_information, setup_neovide_specific_state};
@@ -212,6 +212,18 @@ async fn create_neovim_session(
     // Triggers loading the user config
 
     let grid_size = grid_size.map_or(DEFAULT_GRID_SIZE, |v| clamped_grid_size(&v));
+
+    // The `restart` UI event (nvim 0.13+) carries channel-specific properties
+    // (e.g. `detach`) from the old server. Restore them on the new server
+    // before attaching, per the UI protocol contract.
+    if let Some(chan_config) = restart_details.and_then(|r| r.chan_config.clone()) {
+        let result =
+            session.neovim.call("nvim_chan_set", call_args![0i64, chan_config]).await;
+        if !matches!(result, Ok(Ok(_))) {
+            log::warn!("Failed to restore channel config on the new server after restart: {result:?}");
+        }
+    }
+
     session
         .neovim
         .ui_attach(grid_size.width as i64, grid_size.height as i64, &options)
