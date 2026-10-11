@@ -45,16 +45,19 @@ pub struct ApiVersion {
 }
 
 impl ApiVersion {
+    /// A pre-release only matches lower versions when prerelease is set to None.
+    /// So NVIM v0.12.0-dev-1253+gfb2d736481 matches for the arguments 0, 11, 1, None but not for 0, 12, 0, None.
+    /// When the prerelease is set to some number it compares the field after -dev in the version string.
+    /// So the above version matches for the arguments 0, 12, 0, Some(1253), but not for 0, 12, 0, Some(1254).
+    /// See the tests for more examples.
     #[allow(dead_code)]
     pub fn has_version(&self, major: u64, minor: u64, patch: u64, prerelease: Option<u64>) -> bool {
-        self.major > major
-            || (self.major == major && self.minor > minor)
-            || ((self.major == major && self.minor == minor && self.patch >= patch)
-                && !self.prerelease)
-            || (self.major == major
-                && self.minor == minor
-                && self.patch == patch
-                && matches!(prerelease, Some(prerelease) if self.prerelease_version >= prerelease))
+        let version = (self.major, self.minor, self.patch);
+        let required = (major, minor, patch);
+        version > required
+            || (version == required
+                && (!self.prerelease
+                    || matches!(prerelease, Some(prerelease) if self.prerelease_version >= prerelease)))
     }
 }
 
@@ -179,6 +182,7 @@ pub struct ApiInformation {
     pub functions: HashSet<ApiFunction>,
     pub ui_options: Vec<String>,
     pub ui_events: HashSet<ApiEvent>,
+    // types and error_error types are not implemented
 }
 
 impl ApiInformation {
@@ -215,11 +219,15 @@ fn parse_version(
             Some("prerelease") => prerelease = Some(v.try_into()?),
             Some("api_level") => api_level = Some(v.try_into()?),
             Some("api_compatible") => api_compatible = Some(v.try_into()?),
+            // api_prerelease should be a boolean value, but Neovim 0.10.0 sets it to nil for some reason, so assume nil means release
             Some("api_prerelease") => api_prerelase = Some(!v.to_owned().is_nil() && v.try_into()?),
             _ => {}
         }
     }
 
+    // The api information does unfortunately not contain the detailed git information, so parse that from the version string
+    // A pre-release has the following format
+    // NVIM v0.12.0-dev-1253+gfb2d736481
     let mut prerelease_version = 0;
     let mut prerelease_commit = String::default();
     if let Some((_, dev, version)) =
@@ -235,7 +243,7 @@ fn parse_version(
         major: major.ok_or("major field is missing")?,
         minor: minor.ok_or("minor field is missing")?,
         patch: patch.ok_or("patch field is missing")?,
-        prerelease: prerelease.ok_or("prerelease field is missing")?,
+        prerelease: prerelease.ok_or("prerelease field is isssing")?,
         api_level: api_level.ok_or("api_level field is missing")?,
         api_compatible: api_compatible.ok_or("api_compatible field is missing")?,
         api_prerelease: api_prerelase.ok_or("api_prerelease field is missing")?,
@@ -415,11 +423,13 @@ fn version_match() {
     assert!(version.has_version(1, 11, 3, None));
     assert!(version.has_version(1, 10, 0, None));
     assert!(version.has_version(0, 11, 4, None));
+    // We also have a pre-release of previous versions
     assert!(version.has_version(1, 11, 4, Some(1253)));
     assert!(version.has_version(1, 10, 4, Some(1253)));
     assert!(!version.has_version(1, 11, 5, None));
     assert!(!version.has_version(1, 12, 4, None));
     assert!(!version.has_version(2, 11, 4, None));
+    // We don't have a pre-release of newer versions
     assert!(!version.has_version(1, 12, 0, Some(0)));
     assert!(!version.has_version(1, 11, 5, Some(0)));
 }
@@ -442,14 +452,17 @@ fn version_match_prerelease() {
     assert!(version.has_version(1, 11, 3, None));
     assert!(version.has_version(1, 10, 0, None));
     assert!(version.has_version(0, 11, 4, None));
+    // We also have a pre-release of previous versions
     assert!(version.has_version(1, 11, 4, Some(1253)));
     assert!(version.has_version(1, 10, 4, Some(1253)));
     assert!(version.has_version(1, 11, 5, None));
     assert!(!version.has_version(1, 12, 4, None));
     assert!(!version.has_version(2, 11, 4, None));
+    // We have a pre-release that allows these
     assert!(version.has_version(1, 12, 0, Some(0)));
     assert!(version.has_version(1, 12, 0, Some(1253)));
     assert!(version.has_version(1, 11, 5, Some(0)));
+    // But not these
     assert!(!version.has_version(1, 12, 1, Some(0)));
     assert!(!version.has_version(1, 12, 0, Some(1254)));
 }
