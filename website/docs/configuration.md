@@ -1157,7 +1157,7 @@ vim.g.neovide_cursor_trail_corner_timing = "rank"
 
 Setting `g:neovide_cursor_trail_corner_timing` controls the animation timing of the four
 corners during a cursor trail, that is, which corners lead and which lag behind. It accepts
-one of three string values.
+one of four string values.
 
 With `"rank"` (the default), Neovide keeps its original cursor trail timing: the corners
 are ranked by their alignment with the movement direction, the leading corners in ranks 2
@@ -1195,9 +1195,23 @@ the spike disappears. The arrival order still matches `"rank"` for purely horizo
 the left edge upward). The only differences from `"alignment"` are the size of the shear term
 and its automatic attenuation for long jumps; the two remain equally continuous.
 
+With `"performance"`, the four corners always move as a whole at the full `animation_length`, so
+the cursor slides smoothly to its destination as a rigid block. It completely ignores
+`g:neovide_cursor_trail_size`: whatever that setting is, every corner keeps the full
+`animation_length` as its duration, the speed stays constant, and the cursor stays a rigid
+block. There is no shear between the corners, no trail, and no cut. Short moves such as
+typing or pressing an arrow key still take the existing short animation path, which uses
+`g:neovide_cursor_short_animation_length` and is shorter than `animation_length`. The cost is
+that there is no trailing effect whatsoever, and since the cursor still slides as a whole over
+the full `animation_length`, a uniform lag remains as well, it just never smears into a trail.
+The benefit is that the cursor shape is never stretched out of form, the speed does not depend
+on `g:neovide_cursor_trail_size`, and the behavior is the most predictable, while short moves
+stay the fastest.
+
 The `g:neovide_cursor_trail_size` setting determines the difference between the leading and
 trailing durations, while this setting determines how that difference is distributed among
-the four corners.
+the four corners. `"performance"` is the exception, it ignores the trail size and always moves
+all four corners at the same rate.
 
 #### Max Edge Skew
 
